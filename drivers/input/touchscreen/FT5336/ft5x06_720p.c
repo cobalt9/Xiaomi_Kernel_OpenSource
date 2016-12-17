@@ -56,6 +56,10 @@ static u8 lockdown_info[FT_LOCKDOWN_SIZE];
 extern u8 tp_color;
 #endif
 
+#ifdef CONFIG_WAKE_GESTURES
+#include <linux/wake_gestures.h>
+#endif
+
 static u8 TP_Maker, LCD_Maker;
 
 #define FT_DEBUG_DIR_NAME   "ts_debug"
@@ -412,6 +416,11 @@ static irqreturn_t ft5x06_ts_interrupt(int irq, void *dev_id)
 				break;
 			default:
 				break;
+
+#ifdef CONFIG_WAKE_GESTURES
+		if (data->suspended)
+			x += 5000;
+#endif
 			}
 
 		}
@@ -595,6 +604,19 @@ static int ft5x06_ts_suspend(struct device *dev)
 		return 0;
 	}
 
+#ifdef CONFIG_WAKE_GESTURES
+	if (device_may_wakeup(dev) && (s2w_switch || dt2w_switch)) {
+		ft5x0x_write_reg(data->client, 0xD0, 1);
+		err = enable_irq_wake(data->client->irq);
+		if (err)
+			dev_err(&data->client->dev,
+				"%s: set_irq_wake failed\n", __func__);
+		data->suspended = true;
+
+		return err;
+	}
+#endif
+
 	disable_irq(data->client->irq);
 
 	/* release all touches */
@@ -646,10 +668,44 @@ static int ft5x06_ts_resume(struct device *dev)
 	struct ft5x06_ts_data *data = dev_get_drvdata(dev);
 	int err;
 
+#ifdef CONFIG_WAKE_GESTURES
+	int i;
+#endif
+ 
 	if (!data->suspended) {
 		dev_dbg(dev, "Already in awake state\n");
 		return 0;
 	}
+
+#ifdef CONFIG_WAKE_GESTURES
+	if (device_may_wakeup(dev) && (s2w_switch || dt2w_switch)) {
+		ft5x0x_write_reg(data->client, 0xD0, 0);
+
+		for (i = 0; i < data->pdata->num_max_touches; i++) {
+			input_mt_slot(data->input_dev, i);
+			input_mt_report_slot_state(data->input_dev, MT_TOOL_FINGER, 0);
+		}
+		input_mt_report_pointer_emulation(data->input_dev, false);
+		input_sync(data->input_dev);
+
+		err = disable_irq_wake(data->client->irq);
+		if (err)
+			dev_err(dev, "%s: disable_irq_wake failed\n",
+				__func__);
+		data->suspended = false;
+
+		if (dt2w_switch_changed) {
+			dt2w_switch = dt2w_switch_temp;
+			dt2w_switch_changed = false;
+		}
+		if (s2w_switch_changed) {
+			s2w_switch = s2w_switch_temp;
+			s2w_switch_changed = false;
+		}
+
+		return err;
+	}
+#endif
 
 	if (data->pdata->power_on) {
 		err = data->pdata->power_on(true);
@@ -766,6 +822,14 @@ static void ft5x06_ts_late_resume(struct early_suspend *handler)
 						   early_suspend);
 
 	ft5x06_ts_resume(&data->client->dev);
+}
+#endif
+
+#ifdef CONFIG_WAKE_GESTURES
+struct ft5x06_ts_data *ft5x06_ts = NULL;
+
+bool scr_suspended_ft(void) {
+	return ft5x06_ts->suspended;
 }
 #endif
 
@@ -2596,6 +2660,11 @@ static int ft5x06_ts_probe(struct i2c_client *client,
 	}
 
 	disable_irq(data->client->irq);
+
+#ifdef CONFIG_WAKE_GESTURES
+	ft5x06_ts = data;
+	device_init_wakeup(&client->dev, 1);
+#endif
 
 #if CTP_SYS_APK_UPDATE
 	err = device_create_file(&client->dev, &dev_attr_fw_name);
