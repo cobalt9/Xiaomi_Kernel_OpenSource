@@ -306,6 +306,14 @@ static int ft5x0x_read_reg(struct i2c_client *client, u8 addr, u8 *val)
 	return ft5x06_i2c_read(client, &addr, 1, val, 1);
 }
 
+#ifdef CONFIG_WAKE_GESTURES
+struct ft5x06_ts_data *ft5x06_ts = NULL;
+
+bool scr_suspended_ft(void) {
+	return ft5x06_ts->suspended;
+}
+#endif
+
 static void ft5x06_update_fw_vendor_id(struct ft5x06_ts_data *data)
 {
 	struct i2c_client *client = data->client;
@@ -400,6 +408,11 @@ static irqreturn_t ft5x06_ts_interrupt(int irq, void *dev_id)
 		if (!num_touches && !status && !id)
 			break;
 
+#ifdef CONFIG_WAKE_GESTURES
+		if (data->suspended)
+			x += 5000;
+#endif
+
 		if (y == 2000) {
 
 			y = 1344;
@@ -416,11 +429,6 @@ static irqreturn_t ft5x06_ts_interrupt(int irq, void *dev_id)
 				break;
 			default:
 				break;
-
-#ifdef CONFIG_WAKE_GESTURES
-		if (data->suspended)
-			x += 5000;
-#endif
 			}
 
 		}
@@ -822,14 +830,6 @@ static void ft5x06_ts_late_resume(struct early_suspend *handler)
 						   early_suspend);
 
 	ft5x06_ts_resume(&data->client->dev);
-}
-#endif
-
-#ifdef CONFIG_WAKE_GESTURES
-struct ft5x06_ts_data *ft5x06_ts = NULL;
-
-bool scr_suspended_ft(void) {
-	return ft5x06_ts->suspended;
 }
 #endif
 
